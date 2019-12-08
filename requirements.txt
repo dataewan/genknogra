@@ -1,0 +1,7 @@
+gensim==3.8.1
+PyYAML==5.1.2
+tqdm==4.39.0
+Click==7.0
+gensim==3.8.1
+wikitextparser==0.28.1
+nltk==3.4.5
