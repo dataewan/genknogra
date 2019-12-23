@@ -10,11 +10,15 @@ import pickle
 import wikitextparser as wtp
 from gensim.corpora import wikicorpus
 from nltk import tokenize
+import pyarrow as pa
+import pyarrow.parquet as pq
+import numpy as np
 
 logging.basicConfig(level=config.loglevel)
 LINK_RE = re.compile("\[\[(.*?)\]\]")
 NUMBER_CHARACTERS_IN_LINK_NO_DESC = 4
 NUMBER_CHARACTERS_IN_LINK_WITH_DESC = 5
+
 
 def findwikifiles():
     return glob.glob(os.path.join(config.datadir, "*bz2"))
@@ -77,25 +81,30 @@ def strip_link(sentence):
         did_contain_link (bool): did this contain a link
         stripped (str): sentence with the first link markup removed
         link_page (str): the page being linked to
+        description (str): how that page is described in the text
         span_start (int): the index in stripped where the description starts
         span_end (int): the index in stripped where the description ends
     
 
     """
-    re_search = LINK_RE.search(sentence)
-    if re_search:
-        match = re_search.group()[2:-2]
-        if "|" in match:
-            page, description = match.split("|")
-            length_removed = len(page) + NUMBER_CHARACTERS_IN_LINK_WITH_DESC
+    try:
+        re_search = LINK_RE.search(sentence)
+        if re_search:
+            match = re_search.group()[2:-2]
+            if "|" in match:
+                page, description = match.split("|")
+                length_removed = len(page) + NUMBER_CHARACTERS_IN_LINK_WITH_DESC
+            else:
+                page, description = match, match
+                length_removed = NUMBER_CHARACTERS_IN_LINK_NO_DESC
+            start, end = re_search.span()
+            stripped = sentence[:start] + description + sentence[end:]
+            return True, stripped, page, description, start, end - length_removed
         else:
-            page, description = match, match
-            length_removed = NUMBER_CHARACTERS_IN_LINK_NO_DESC
-        start, end = re_search.span()
-        stripped = sentence[:start] + description + sentence[end:]
-        return True, stripped, page, start, end - length_removed
-    else:
-        return False, sentence, None, None, None
+            return False, sentence, None, None, None, None
+    except:
+        logging.info(f"Failed to process sentence {sentence}")
+        return False, sentence, None, None, None, None
 
 
 def get_wikilinks(sentence):
@@ -107,23 +116,28 @@ def get_wikilinks(sentence):
     Returns:    
         stripped_sentence (str): sentence with the markup removed
         link_pages list(str): the page being linked to
+        descriptions list(str): how those pages are described
         span_starts list(int): index of where the link description text starts
         span_ends list(int): index of where the link description text ends
     """
     link_pages = []
+    descriptions = []
     span_starts = []
     span_ends = []
-    did_contain_link, stripped, link_page, span_start, span_end = strip_link(sentence)
+    did_contain_link, stripped, link_page, description, span_start, span_end = strip_link(
+        sentence
+    )
 
     while did_contain_link:
         link_pages += [link_page]
+        descriptions += [description]
         span_starts += [span_start]
         span_ends += [span_end]
-        did_contain_link, stripped, link_page, span_start, span_end = strip_link(
+        did_contain_link, stripped, link_page, description, span_start, span_end = strip_link(
             stripped
         )
 
-    return stripped, link_pages, span_starts, span_ends
+    return stripped, link_pages, descriptions, span_starts, span_ends
 
 
 def extract_links(title, pageid, text):
@@ -134,21 +148,103 @@ def extract_links(title, pageid, text):
         pageid (str): page ID
         text (str): text to process
 
-    Returns: TODO
+    Returns: 
+        list of dicts, one for each sentence
+        {
+            sentence: the sentence without any markdown in
+            link_pages: the pages being linked to
+            descriptions: the descriptions of the pages
+            span_starts: the start indexes of the strings used as display links
+            span_ends: end indexes of the same
+        }
 
     """
+    output = []
     sections = wtp.parse(text).sections
     for section in sections:
         text = wikicorpus.remove_markup(
-            section, promote_remaining=False, simplify_links=False
+            section.contents, promote_remaining=False, simplify_links=False
         )
+        text = wikicorpus.remove_template(text)
+        text = wikicorpus.remove_file(text)
         sentences = tokenize.sent_tokenize(text)
 
+        for sentence in sentences:
+            stripped, link_pages, descriptions, span_starts, span_ends = get_wikilinks(
+                sentence
+            )
 
-def main():
-    wikifiles = findwikifiles()
+            output.append(
+                {
+                    "sentence": stripped,
+                    "link_pages": link_pages,
+                    "descriptions": descriptions,
+                    "span_starts": span_starts,
+                    "span_ends": span_ends,
+                }
+            )
+
+    return output
+
+
+def define_schema():
+    fields = [
+        ("page_title", pa.string()),
+        ("page_id", pa.uint64()),
+        ("sentence", pa.string()),
+        ("linked_pages", pa.list_(pa.string())),
+        ("descriptions", pa.list_(pa.string())),
+    ]
+    return pa.schema(fields)
+
+
+def get_single_record(title, pageid, text):
+    sentences = extract_links(title, pageid, text)
+    for idx, sentence in enumerate(sentences):
+        extracted_sentence = sentence["sentence"]
+        linked_pages = sentence["link_pages"]
+        descriptions = sentence["descriptions"]
+        yield (
+            title,
+            pageid,
+            extracted_sentence,
+            linked_pages,
+            descriptions,
+        )
+
+
+def create_parquet():
+    myschema = define_schema()
+    wikifiles = findwikifiles()[0]
+    writer = pq.ParquetWriter(config.output_parquet, schema=myschema)
+    titles = []
+    pageids = []
+    sentences = []
+    linked_pages = []
+    descriptions = []
+
+    for i, (title, pageid, text) in enumerate(process_file(wikifiles)):
+        if i % 100 == 99:
+            logging.info(f"processing {title}")
+        records = get_single_record(title, pageid, text)
+        for record in records:
+            titles.append(record[0])
+            pageids.append(record[1])
+            sentences.append(record[2])
+            linked_pages.append(record[3])
+            descriptions.append(record[4])
+
+    t = pa.Table.from_arrays(
+        [titles, pageids, sentences, linked_pages, descriptions],
+        schema=myschema,
+    )
+    writer.write_table(t)
+    writer.close()
+
+
+def create_test_set():
+    wikifiles = findwikifiles()[0]
     p = 0.001
-
-    for title, pageid, text in process_file(wikifiles[0]):
+    for title, pageid, text in process_file(wikifiles):
         if random.random() < p:
             export_test_set(title, pageid, text)

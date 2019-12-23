@@ -3,7 +3,7 @@ from genknogra.entitylinking import processwiki
 
 def test_no_links():
     sentence = "sentence with no links."
-    stripped_sentence, link_page, span_start, span_end = processwiki.get_wikilinks(
+    stripped_sentence, link_page, description, span_start, span_end = processwiki.get_wikilinks(
         sentence
     )
 
@@ -15,7 +15,7 @@ def test_no_links():
 
 def test_onelink_no_description():
     sentence = "sentence [[with]] one link with no description."
-    stripped_sentence, link_page, span_start, span_end = processwiki.get_wikilinks(
+    stripped_sentence, link_page, description, span_start, span_end = processwiki.get_wikilinks(
         sentence
     )
 
@@ -27,7 +27,7 @@ def test_onelink_no_description():
 
 def test_onelink_with_description():
     sentence = "sentence [[linking_page|with]] one link with description."
-    stripped_sentence, link_page, span_start, span_end = processwiki.get_wikilinks(
+    stripped_sentence, link_page, description, span_start, span_end = processwiki.get_wikilinks(
         sentence
     )
 
@@ -39,7 +39,7 @@ def test_onelink_with_description():
 
 def test_multilink_no_description():
     sentence = "sentence [[with]] multiple link with [[no]] description."
-    stripped_sentence, link_page, span_start, span_end = processwiki.get_wikilinks(
+    stripped_sentence, link_page, description, span_start, span_end = processwiki.get_wikilinks(
         sentence
     )
 
@@ -51,7 +51,7 @@ def test_multilink_no_description():
 
 def test_multilink_with_description():
     sentence = "sentence [[linking_page|with]] multiple link with [[linking_page|no]] description."
-    stripped_sentence, link_page, span_start, span_end = processwiki.get_wikilinks(
+    stripped_sentence, link_page, description, span_start, span_end = processwiki.get_wikilinks(
         sentence
     )
 

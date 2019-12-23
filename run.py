@@ -15,13 +15,18 @@ def download(url):
     get_data.main(url)
 
 
-@click.command(help="Process downloaded wikipedia files")
-def process():
-    processwiki.main()
+@click.command(help="Create test dataset to experiment on")
+def testset():
+    processwiki.create_test_set()
+
+@click.command(help="Get links and sentences, output to parquet")
+def parquet():
+    processwiki.create_parquet()
 
 
 cli.add_command(download)
-cli.add_command(process)
+cli.add_command(testset)
+cli.add_command(parquet)
 
 if __name__ == "__main__":
     cli()
