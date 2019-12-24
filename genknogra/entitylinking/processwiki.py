@@ -16,6 +16,7 @@ import numpy as np
 
 logging.basicConfig(level=config.loglevel)
 LINK_RE = re.compile("\[\[(.*?)\]\]")
+IMAGE_LINK_RE = re.compile("\[\[.*?(alt=|\|thumb|\|right|\|left).*?\]\]")
 NUMBER_CHARACTERS_IN_LINK_NO_DESC = 4
 NUMBER_CHARACTERS_IN_LINK_WITH_DESC = 5
 
@@ -140,6 +141,11 @@ def get_wikilinks(sentence):
     return stripped, link_pages, descriptions, span_starts, span_ends
 
 
+def remove_imagelinks(text):
+    """There are some unpleasant image links that I'd like to try removing."""
+    return IMAGE_LINK_RE.sub("", text)
+
+
 def extract_links(title, pageid, text):
     """Extract all inter-wiki links from the text. Along with the surrounding sentences.
 
@@ -160,31 +166,35 @@ def extract_links(title, pageid, text):
 
     """
     output = []
-    sections = wtp.parse(text).sections
-    for section in sections:
-        text = wikicorpus.remove_markup(
-            section.contents, promote_remaining=False, simplify_links=False
-        )
-        text = wikicorpus.remove_template(text)
-        text = wikicorpus.remove_file(text)
-        sentences = tokenize.sent_tokenize(text)
-
-        for sentence in sentences:
-            stripped, link_pages, descriptions, span_starts, span_ends = get_wikilinks(
-                sentence
+    try:
+        sections = wtp.parse(text).sections
+        for section in sections:
+            text = wikicorpus.remove_markup(
+                section.contents, promote_remaining=False, simplify_links=False
             )
+            text = wikicorpus.remove_template(text)
+            text = wikicorpus.remove_file(text)
+            text = remove_imagelinks(text)
+            sentences = tokenize.sent_tokenize(text)
 
-            output.append(
-                {
-                    "sentence": stripped,
-                    "link_pages": link_pages,
-                    "descriptions": descriptions,
-                    "span_starts": span_starts,
-                    "span_ends": span_ends,
-                }
-            )
+            for sentence in sentences:
+                stripped, link_pages, descriptions, span_starts, span_ends = get_wikilinks(
+                    sentence
+                )
 
-    return output
+                output.append(
+                    {
+                        "sentence": stripped,
+                        "link_pages": link_pages,
+                        "descriptions": descriptions,
+                        "span_starts": span_starts,
+                        "span_ends": span_ends,
+                    }
+                )
+
+        return output
+    except:
+        return None
 
 
 def define_schema():
@@ -200,46 +210,50 @@ def define_schema():
 
 def get_single_record(title, pageid, text):
     sentences = extract_links(title, pageid, text)
-    for idx, sentence in enumerate(sentences):
-        extracted_sentence = sentence["sentence"]
-        linked_pages = sentence["link_pages"]
-        descriptions = sentence["descriptions"]
-        yield (
-            title,
-            pageid,
-            extracted_sentence,
-            linked_pages,
-            descriptions,
-        )
+    if sentences is not None:
+        for idx, sentence in enumerate(sentences):
+            extracted_sentence = sentence["sentence"]
+            linked_pages = sentence["link_pages"]
+            descriptions = sentence["descriptions"]
+            yield (title, pageid, extracted_sentence, linked_pages, descriptions)
+
+
+def get_outfilename_parquet(wikifilename):
+    return os.path.join(
+        config.output_parquet,
+        os.path.basename(wikifilename.replace(".bz2", ".parquet")),
+    )
 
 
 def create_parquet():
     myschema = define_schema()
-    wikifiles = findwikifiles()[0]
-    writer = pq.ParquetWriter(config.output_parquet, schema=myschema)
-    titles = []
-    pageids = []
-    sentences = []
-    linked_pages = []
-    descriptions = []
+    wikifiles = findwikifiles()
+    for wikifile in wikifiles:
+        outfilename = get_outfilename_parquet(wikifile)
+        if not os.path.exists(outfilename):
+            writer = pq.ParquetWriter(outfilename, schema=myschema)
+            titles = []
+            pageids = []
+            sentences = []
+            linked_pages = []
+            descriptions = []
 
-    for i, (title, pageid, text) in enumerate(process_file(wikifiles)):
-        if i % 100 == 99:
-            logging.info(f"processing {title}")
-        records = get_single_record(title, pageid, text)
-        for record in records:
-            titles.append(record[0])
-            pageids.append(record[1])
-            sentences.append(record[2])
-            linked_pages.append(record[3])
-            descriptions.append(record[4])
+            for i, (title, pageid, text) in enumerate(process_file(wikifile)):
+                if i % 100 == 99:
+                    logging.info(f"processing {title}")
+                records = get_single_record(title, pageid, text)
+                for record in records:
+                    titles.append(record[0])
+                    pageids.append(record[1])
+                    sentences.append(record[2])
+                    linked_pages.append(record[3])
+                    descriptions.append(record[4])
 
-    t = pa.Table.from_arrays(
-        [titles, pageids, sentences, linked_pages, descriptions],
-        schema=myschema,
-    )
-    writer.write_table(t)
-    writer.close()
+            t = pa.Table.from_arrays(
+                [titles, pageids, sentences, linked_pages, descriptions], schema=myschema
+            )
+            writer.write_table(t)
+            writer.close()
 
 
 def create_test_set():
