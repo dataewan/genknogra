@@ -1,5 +1,5 @@
 gensim==3.8.1
-PyYAML==5.1.2
+PyYAML==5.4
 tqdm==4.39.0
 Click==7.0
 gensim==3.8.1
